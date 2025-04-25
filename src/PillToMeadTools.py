@@ -1,4 +1,5 @@
 from __future__ import annotations
+import sys
 from bleak import BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
@@ -9,6 +10,7 @@ from struct import unpack
 from collections import namedtuple
 from datetime import datetime, timezone
 import traceback
+import logging
 import requests
 from pprint import pprint
 from time import time
@@ -126,7 +128,7 @@ class MeadTools(object):
         """save the self.data back to data.json"""
         self.data_path.chmod(0o777)
         self.data_path.write_text(json.dumps(self.data, indent=4, separators=(",", ": ")))
-        print("Saved data!")
+        self.pill_holder.log_event("Saved data!")
 
     def handle_login(self):
         """Handle logging in or refreshing accessToken
@@ -138,15 +140,16 @@ class MeadTools(object):
         if self.mt_data.get("AccessToken", None) and self.mt_data.get("RefreshToken", None):
             success = self.refresh_login()
             if not success:
-                print("Refresh Login failed, login again...")
-                self.login()
-            print(f"Refreshed Login: {success}")
+                self.pill_holder.log_event("Refresh Login failed, login again...")
+                success = self.login()
+            self.pill_holder.log_event(f"Refreshed Login: {success}")
 
         elif self.mt_data.get("MTEmail", None) and self.mt_data.get("MTPassword", None):
             success = self.login()
         else:
             raise RuntimeError("Not able to login. Check email and password are set in data.json")
         self.logged_in = success
+        self.pill_holder.ui.logged_in(self.logged_in)
 
     def refresh_login(self) -> bool:
         """Refresh the access token for the given user
@@ -158,17 +161,19 @@ class MeadTools(object):
             "email": self.mt_data.get("MTEmail", None),
             "refreshToken": self.mt_data.get("RefreshToken", None),
         }
-        print("Refreshing login details...")
+        self.pill_holder.log_event("Refreshing login details...")
         response = requests.post(self.__refresh_url__, json=body)
         if response.status_code == 200:
             self.mt_data["AccessToken"] = response.json().get("accessToken")
-
+            self.__token__ = response.json().get("accessToken")
             self.save_data()
-            print("Refreshed login to MeadTools: Successful")
+            self.pill_holder.log_event("Refreshed login to MeadTools: Successful")
+            self.logged_in = True
             return True
         else:
-            print(f"Failed to Refresh Login! {response}")
-            print(f"Attempted with: URL:{self.__refresh_url__} body: {body}")
+            self.pill_holder.log_event(f"Failed to Refresh Login! {response}")
+            self.pill_holder.log_event(f"Attempted with: URL:{self.__refresh_url__} body: {body}")
+            self.logged_in = False
             return False
 
     def login(self) -> bool:
@@ -181,18 +186,20 @@ class MeadTools(object):
             "email": self.mt_data.get("MTEmail", None),
             "password": self.mt_data.get("MTPassword", None),
         }
-        print("Trying to login to MeadTools...")
+        self.pill_holder.log_event("Trying to login to MeadTools...")
         response = requests.post(self.__login_url__, json=body)
+        self.pill_holder.log_event(f"LoginResponse: {response.status_code}")
         if response.status_code == 200:
             self.mt_data["RefreshToken"] = response.json().get("refreshToken")
             self.mt_data["AccessToken"] = response.json().get("accessToken")
             self.__token__ = response.json().get("accessToken")
             self.save_data()
-            print("Logged into MeadTools")
+            self.logged_in = True
+            self.pill_holder.log_event("Logged into MeadTools")
             return True
         else:
-            print(f"Failed to Login! {response}")
-            print(f"Attempted with: URL: {self.__login_url__} body: {body}")
+            self.pill_holder.log_event(f"Failed to Login! {response}")
+            self.pill_holder.log_event(f"Attempted with: URL: {self.__login_url__} body: {body}")
             return False
 
     def wait_for_token(self, port=8080):
@@ -205,7 +212,7 @@ class MeadTools(object):
             str: response - in this case a token
         """
         with HTTPServer(("localhost", port), OAuthRedirectHandler) as httpd:
-            print(f"Waiting on Authentication... http://localhost:{port} ...")
+            self.pill_holder.log_event(f"Waiting on Authentication... http://localhost:{port} ...")
             httpd.handle_request()
             return httpd.token
 
@@ -219,25 +226,30 @@ class MeadTools(object):
         webbrowser.open_new(self.mt_data.get("MTGAuth", "No Google Auth URL!"))
 
         token = self.wait_for_token()
+        if token == "" or token is None:
+            return
         self.__token__ = token
-        self.mt_data["GToken"] = token
+        self.mt_data["AccessToken"] = token
         self.save_data()
+        self.logged_in = self.__token__ is not None
+        # update the gui now that we're hopefully logged in
+        self.pill_holder.ui.logged_in(self.logged_in)
         return True
 
     def get_hydrometers(self):
-        print(f"Getting Hydrometers from MeadTools: {self.headers} - {self.__hyrdom_url__}")
+        self.pill_holder.log_event(f"Getting Hydrometers from MeadTools: {self.headers} - {self.__hyrdom_url__}")
 
         response = requests.get(self.__hyrdom_url__, headers=self.headers)
         if response.status_code == 200:
-            print(f"Hydrometers: {response.json()}")
+            self.pill_holder.log_event(f"Hydrometers: {response.json()}")
             self.hydrometers = response.json().get("devices")
             self.pill_holder.update_status("Successfully got hydrometers from Mead Tools...")
             return True
         else:
 
-            print(f"Failed to get hydrometers! {response}")
+            self.pill_holder.log_event(f"Failed to get hydrometers! {response}")
             self.pill_holder.update_status(f"Failed to get hydrometers from Mead Tools... Error Code:{response}")
-            print(f"Attempted with: URL:{self.__hyrdom_url__} and Auth headers")
+            self.pill_holder.log_event(f"Attempted with: URL:{self.__hyrdom_url__} and Auth headers")
             return False
 
     def register_hydrometer(self, hydrom_name: str):
@@ -250,26 +262,33 @@ class MeadTools(object):
             str: hydrometer_token
         """
         body = {"token": self.deviceid, "name": hydrom_name}
-        print(f"Registering Hydrometer on MeadTools... Body: {body}  URL:{self.__reg_hydrom_url__}")
+        self.pill_holder.log_event(
+            f"Registering Hydrometer on MeadTools... Body: {body}  URL:{self.__reg_hydrom_url__}"
+        )
         pprint(body, indent=4)
         response = requests.post(self.__reg_hydrom_url__, json=body)
         if response.status_code == 200:
-            print("Successfully logged data to MTools...")
+            self.pill_holder.log_event("Successfully logged data to MTools...")
             return response.json().get("id", "No Id!")
         else:
-            print(f"!!! Failed to register hydrometer! {response} !!!")
+            self.pill_holder.log_event(f"!!! Failed to register hydrometer! {response} !!!")
             return False
 
     def get_brews(self):
-        print(f"Getting Brews from MeadTools - {self.headers} - {self.__brews_url__}")
+        """Get all the registered brews from MT
+        If successful, puts into self.brews
+        Returns:
+            bool: True if successful, else false
+        """
+        self.pill_holder.log_event(f"Getting Brews from MeadTools - {self.headers} - {self.__brews_url__}")
         response = requests.get(self.__brews_url__, headers=self.headers)
         if response.status_code == 200:
-            print(f"Brews: {response.json()}")
+            self.pill_holder.log_event(f"Brews: {response.json()}")
             # should return just a list of brew objects
             self.brews = response.json()
             return True
         else:
-            print(f"Failed to get Brews! {response}")
+            self.pill_holder.log_event(f"Failed to get Brews! {response}")
             return False
 
     def register_brew(self, brew_name: str, hydrom_id: str):
@@ -282,16 +301,16 @@ class MeadTools(object):
             "device_id": hydrom_id,
             "brew_name": brew_name,
         }
-        print(f"Registering brews with MeadTools : {body}  URL:{self.__brews_url__}")
+        self.pill_holder.log_event(f"Registering brews with MeadTools : {body}  URL:{self.__brews_url__}")
         response = requests.post(self.__brews_url__, headers=self.headers, json=body)
-        print(f"Response: ", response)
+        self.pill_holder.log_event(f"Response: { response}")
         if response.status_code == 200:
-            print(f"brews: {response.json()}")
+            self.pill_holder.log_event(f"brews: {response.json()}")
             self.brews = response.json()
             return response.json()
 
         else:
-            print(f"Failed to register brews! {response}")
+            self.pill_holder.log_event(f"Failed to register brews! {response}")
             raise RuntimeError(f"Couldn't register brew:{brew_name} -  {response} : headers:{self.headers}")
 
     def generate_device_token(self):
@@ -304,7 +323,7 @@ class MeadTools(object):
         Returns:
             str: generated token
         """
-        print(f"Try to register deviceId... {self.__token_url__} : headers{self.headers}")
+        self.pill_holder.log_event(f"Try to register deviceId... {self.__token_url__} : headers{self.headers}")
         response = requests.post(self.__token_url__, headers=self.headers)
         # this should respond with
         """
@@ -318,34 +337,34 @@ class MeadTools(object):
             self.deviceid = token
             return token
         else:
-            print(f"Failed to register deviceid! {response}")
+            self.pill_holder.log_event(f"Failed to register deviceid! {response}")
             self.pill_holder.update_status(f"Couldn't register Pill with MeadTools: {response}")
             raise RuntimeError(f"Couldn't register Pill with MeadTools: {response}")
 
     def delete_brew(self, brew_data: dict):
 
         if not brew_data.get("end_date", None):
-            print(f"Brew: {brew_data.get('name')} is not ended, can't delete!")
+            self.pill_holder.log_event(f"Brew: {brew_data.get('name')} is not ended, can't delete!")
             return False
         brew_id = brew_data.get("id")
-        print(f"Trying to delete brew: {self.__brews_url__}/{brew_id}")
+        self.pill_holder.log_event(f"Trying to delete brew: {self.__brews_url__}/{brew_id}")
 
         response = requests.delete(f"{self.__brews_url__}/{brew_id}", headers=self.headers)
-        print(response)
+        self.pill_holder.log_event(response)
 
         if response.status_code == 200:
-            print("Deleted brew successfully!")
+            self.pill_holder.log_event("Deleted brew successfully!")
             return True
         else:
-            print("Failed to delete brew!")
+            self.pill_holder.log_event("Failed to delete brew!")
             return False
 
     def link_brew_to_recipe(self, brewid, recipe_id: int):
         if recipe_id == -1:
-            print("No brewId set (-1) - not linking...")
+            self.pill_holder.log_event("No brewId set (-1) - not linking...")
             return
         body = {"recipe_id": int(recipe_id)}
-        print(f"Trying to link brew: {body} - url: {self.__brews_url__}/{self.brewid}")
+        self.pill_holder.log_event(f"Trying to link brew: {body} - url: {self.__brews_url__}/{self.brewid}")
         response = requests.patch(f"{self.__brews_url__}/{brewid}", headers=self.headers, json=body)
         # this should respond with
         """
@@ -356,7 +375,7 @@ class MeadTools(object):
         if response.status_code == 200:
             return response.json().get("MTDeviceId", "")
         else:
-            print(f"Failed to link brew:{self.brewid} to recipe:{body.get('recipe_id')}")
+            self.pill_holder.log_event(f"Failed to link brew:{self.brewid} to recipe:{body.get('recipe_id')}")
             raise RuntimeError(f"Failed to link brew:{self.brewid} to recipe:{body.get('recipe_id')} - {response}")
 
     def end_brew(self, hyrdometer_token, brew_id):
@@ -367,7 +386,7 @@ class MeadTools(object):
             "brew_id": brew_id,
         }
 
-        print(f"Trying to end brew with {body}")
+        self.pill_holder.log_event(f"Trying to end brew with {body}")
         response = requests.patch(f"{self.__brews_url__}", headers=self.headers, json=body)
         # this should respond with
         """
@@ -381,9 +400,9 @@ class MeadTools(object):
         }
         """
         if response.status_code == 200:
-            print(f"Ended brew: {self.brew_name}")
+            self.pill_holder.log_event(f"Ended brew: {self.brew_name}")
         else:
-            print(f"Failed to end brew -  {response}")
+            self.pill_holder.log_event(f"Failed to end brew -  {response}")
 
     def ingredients(self):
         """Get the list of ingredients from MeadTools"""
@@ -392,9 +411,9 @@ class MeadTools(object):
             "MTPassword": self.data.get("MTPassword", None),
         }
         __login_url__ = f"{self.__base_url__}/ingredients"
-        print(__login_url__, body)
+        self.pill_holder.log_event(__login_url__, body)
         response = requests.get(__login_url__)
-        print(response.json())
+        self.pill_holder.log_event(response.json())
 
     def add_data_point(self, pill: RaptPill):
         body = {
@@ -405,14 +424,14 @@ class MeadTools(object):
             "temp_units": pill.temp_unit,
             "battery": pill.battery,
         }
-        print(f"Sending data to MeadTools... Body: {body}  URL:{self.__pill_url__}")
+        self.pill_holder.log_event(f"Sending data to MeadTools... Body: {body}  URL:{self.__pill_url__}")
         pprint(body, indent=4)
         response = requests.post(self.__pill_url__, json=body)
         if response.status_code == 200:
-            print("Successfully logged data to MTools...")
+            self.pill_holder.log_event("Successfully logged data to MTools...")
             return True
         else:
-            print(f"!!! Failed to log data to MeadTools! {response} !!!")
+            self.pill_holder.log_event(f"!!! Failed to log data to MeadTools! {response} !!!", "error")
             return False
 
 
@@ -443,7 +462,7 @@ class RaptPill(object):
             temp_as_celsius(bool): set False if you want temp as F instead
         """
         # RAPT only lets you put 30 seconds as the lowest temp anyways
-        self.min_time = 5
+        self.min_time = 20
         self.last_time = time()
 
         self.thread = None
@@ -488,10 +507,12 @@ class RaptPill(object):
         self.__log_to_db = log_to_db
         self.mtools = mtools
         if self.__log_to_db:
-            self.mtools.handle_login()
-            if not self.mtools.logged_in:
+            # self.mtools.handle_login()
+            if not self.mtools.logged_in and self.__log_to_db:
                 self.pill_holder.update_status("Not Logged in will only print to output...")
                 self.__log_to_db = False
+            elif not self.__log_to_db and not self.mtools.logged_in:
+                raise RuntimeError("Couldn't start logging due to not being logged in to Mead Tools!")
             else:
                 self.mtools.get_hydrometers()
                 self.hydrometer = next(
@@ -610,7 +631,7 @@ class RaptPill(object):
         self.thread.join()
 
     def start_session(self):
-        print(f"Starting Session: {self.session_name}")
+        self.pill_holder.log_event(f"Starting Session: {self.session_name}")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
@@ -627,16 +648,11 @@ class RaptPill(object):
         loop.run_until_complete(scan())
 
     def end_session(self):
-        print(f"Stopping thread: {self.session_name}")
+        self.pill_holder.log_event(f"Stopping thread: {self.session_name}")
         self.running = False
         self.thread = None
 
-        # if self.__polling_task is not None:
-        #     self.__polling_task.cancel()
-        #     self.__polling_task = None
-        #     self.active_pollers.remove(self)
-        #     self.mtools.end_brew()
-        print(f"Ended Session: {self.session_name}")
+        self.pill_holder.log_event(f"Ended Session: {self.session_name}")
 
     def initialise_brew(self):
         """
@@ -661,7 +677,7 @@ class RaptPill(object):
             self.mtools.register_brew(self.session_name, self.hydrometer_token)
         else:
             # do some checking of the brews to see if we have one registered already that matches our details
-            print(f'Looking for brew: {self.session_data.get("BrewName")}')
+            self.pill_holder.log_event(f'Looking for brew: {self.session_data.get("BrewName")}')
             existing_brew = next(
                 (
                     x
@@ -676,11 +692,16 @@ class RaptPill(object):
                 None,
             )
             if not existing_brew:
-                print("Couldn't find matching brew name and device_id that is still ongoing... registering new brew!")
+                self.pill_holder.log_event(
+                    "Couldn't find matching brew name and device_id that is still ongoing... registering new brew!",
+                    "warn",
+                )
                 existing_brew = self.mtools.register_brew(self.session_name, self.hydrometer_token)
                 self.brewid = existing_brew[0].get("id")
             else:
-                print(f"Found existing brew with name: {self.session_data.get('BrewName')} that is ongoing")
+                self.pill_holder.log_event(
+                    f"Found existing brew with name: {self.session_data.get('BrewName')} that is ongoing"
+                )
                 self.brewid = existing_brew.get("id")
 
         if self.brewid and (
@@ -704,8 +725,8 @@ class RaptPill(object):
             return
         if raw_data is None:
             return
+
         self.decode_rapt_data(raw_data)
-        print(self)
 
     def calculate_abv(self, current_gravity: float) -> float:
         """calculate the alchol by volume given the current gravity (we estimate it by calculating against the start gravity we have stored)
@@ -782,6 +803,7 @@ class RaptPill(object):
                 self.last_time = curr_time
 
                 self.mtools.add_data_point(self)
+                self.pill_holder.log_event(self)
                 self.pill_holder.update_status(
                     f"Logged Data to MeadTools for: {self.session_name} - SG:{self.curr_gravity} , Temp: {self.temperature} , ~ABV:{self.abv}"
                 )
@@ -791,8 +813,8 @@ class RaptPill(object):
             if time_since >= self.min_time:
                 self.last_time = curr_time
 
-                print(self)
-                print("Logging to console only")
+                self.pill_holder.log_event(self)
+                self.pill_holder.log_event("Logging to console only")
 
     def __repr__(self):
         return (
@@ -826,9 +848,22 @@ class RaptPill(object):
 class PillHolder(object):
     def __init__(self):
         self.curr_dir = Path(__file__).parent
+        self.log_file = self.curr_dir.joinpath("sessions.log")
+        self.last_log_file = self.curr_dir.joinpath("sessions_last.log")
+        if self.last_log_file.exists():
+            self.last_log_file.unlink()
+        if self.log_file.exists():
+            renamed = self.log_file.with_name("sessions_last.log")
+            self.log_file.rename(renamed)
+            self.log_file = self.curr_dir.joinpath("sessions.log")
+
+        self.logger = None
+        if not self.logger:
+            self.setup_logger()
         self.data_path = self.curr_dir.joinpath("data.json")
         self.pills = []
         self.ui = None
+        self.log_to_db = True
 
         # if data is filled in data.json file use it and start sessions and database (if set)
         if not self.data_path.exists():
@@ -858,10 +893,10 @@ class PillHolder(object):
             raise RuntimeError("Can't currently run without gui!")
 
     def run_pills(self):
-        print("Starting Pill Sessions...")
+        self.log_event("Starting Pill Sessions...")
         for pill_details in self.data.get("Sessions", []):
             # MAC addresses of your RAPT Pill(s) - in case you have more (This hasn't been actually tested but it should in theory work.)
-            print(pill_details)
+            self.log_event(pill_details)
 
             pill = RaptPill(
                 self.data,
@@ -872,19 +907,20 @@ class PillHolder(object):
                 pill_details.get("Mac Address", "No Mac Address Set!"),
                 pill_details.get("Poll Interval", ""),
                 pill_holder=self,
+                log_to_db=self.log_to_db,
                 temp_as_celsius=pill_details.get("Temp in C", True),
                 mtools=self.mtools,
             )
             self.pills.append(pill)
             if pill.mtools.logged_in:
-                print("Should start pill session!")
+                self.log_event("Should start pill session!")
                 pill.start()
 
             else:
                 self.update_status(f"Not logged in to MeadTools - can't start Brew: {pill.session_name}")
 
     def run_pill(self, pill_details: dict):
-        print(f"Running single pill: {pill_details.get('Session Name')}")
+        self.log_event(f"Running single pill: {pill_details.get('Session Name')}")
         pill = RaptPill(
             self.data,
             pill_details,
@@ -899,7 +935,7 @@ class PillHolder(object):
         )
         self.pills.append(pill)
         if pill.mtools.logged_in:
-            print("Should start pill session!")
+            self.log_event("Should start pill session!")
             pill.start()
 
         else:
@@ -925,9 +961,70 @@ class PillHolder(object):
             message (str): message to show
         """
         if not self.ui:
-            print(message)
+            self.log_event(message)
             return
         self.ui.update_status(message)
+
+    def setup_logger(self):
+        logger_name = "MeadTools"
+        logging.basicConfig(
+            level=logging.INFO,
+        )
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        info_handler = logging.StreamHandler(sys.stdout)
+        info_handler.setFormatter(formatter)
+        info_handler.setLevel(logging.INFO)
+
+        err_handler = logging.StreamHandler(sys.stderr)
+        err_handler.setFormatter(formatter)
+        err_handler.setLevel(logging.ERROR)
+
+        crit_handler = logging.StreamHandler(sys.stderr)
+        crit_handler.setFormatter(formatter)
+        crit_handler.setLevel(logging.CRITICAL)
+
+        if logger.handlers:
+            logger.handlers = []
+        logger.addHandler(info_handler)
+        logger.addHandler(err_handler)
+        logger.addHandler(crit_handler)
+
+        fh = logging.FileHandler(self.log_file.as_posix())
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+
+        self.logger = logger
+        self.log_event(f"Logger setup: {self.log_file.as_posix()}")
+
+    def log_event(self, message: str, severity="info"):
+        """log the message to the log file
+
+        Args:
+            message (str): Message to log info from
+            severity (str): severity - info, debug, error/warning/warn, critical
+        """
+        sys_stderr = sys.stderr
+        sys_stdout = sys.stdout
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+
+        if severity.lower() == "info":
+            self.logger.info(message)
+        elif severity.lower() == "debug":
+            self.logger.debug(message)
+        elif severity.lower() in ["warn", "warning", "error"]:
+            self.logger.error(message)
+        elif severity.lower() == "critical":
+            self.logger.critical(message)
+        else:
+            self.logger.info(f"Severity was not correctly specified! : {message}")
+
+        sys.stderr = sys_stderr
+        sys.stdout = sys_stdout
 
 
 def main() -> None:

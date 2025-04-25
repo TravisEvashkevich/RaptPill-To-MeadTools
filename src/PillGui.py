@@ -1,4 +1,5 @@
 from PySide6 import QtWidgets, QtCore, QtGui
+from pathlib import Path
 
 
 WINDOW = None
@@ -37,6 +38,8 @@ class PillWindow(QtWidgets.QMainWindow):
         else:
             self.resize(500, 500)
 
+        self.log_viewer = LogViewer(self.tool.log_file)
+
         # layouts
         self.hlay_MTLogin = QtWidgets.QHBoxLayout()
         self.hlay_auth = QtWidgets.QHBoxLayout()
@@ -59,9 +62,11 @@ class PillWindow(QtWidgets.QMainWindow):
         self.lablineE_password.lineEdit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
 
         self.pbtn_login = QtWidgets.QPushButton("Login")
+        self.pbtn_log = QtWidgets.QPushButton("View Log")
 
         self.hlay_auth.addWidget(self.rbtn_mtUser)
         self.hlay_auth.addWidget(self.rbtn_google)
+        self.hlay_auth.addWidget(self.pbtn_log)
 
         self.hlay_MTLogin.addWidget(self.lablineE_username)
         self.hlay_MTLogin.addWidget(self.lablineE_password)
@@ -75,7 +80,6 @@ class PillWindow(QtWidgets.QMainWindow):
         self.sArea_pills = setup_scrollArea("sArea_pills", True, self)
 
         self.pbtn_startBrews = QtWidgets.QPushButton("Start all brews")
-
         self.statusbar = QtWidgets.QStatusBar()
 
         # Final UI Comp
@@ -88,6 +92,7 @@ class PillWindow(QtWidgets.QMainWindow):
 
         self.load_last_data()
         self.connect_ui()
+        self.logged_in(False)
 
     @property
     def data(self):
@@ -96,6 +101,10 @@ class PillWindow(QtWidgets.QMainWindow):
     @property
     def mdata(self):
         return self.data.get("MTDetails", {})
+
+    @property
+    def mtools(self):
+        return self.tool.mtools
 
     def load_last_data(self):
         """load the last used data in the gui"""
@@ -106,7 +115,7 @@ class PillWindow(QtWidgets.QMainWindow):
 
         if len(self.data.get("Sessions", [])):
             for session in self.data.get("Sessions", []):
-                print("Loading session data")
+                self.tool.log_event("Loading session data")
                 frame_holder = CollapsibleFrame(
                     session.get("BrewName", "BrewNameNot Set"), start_opened=True, parent=self
                 )
@@ -135,6 +144,7 @@ class PillWindow(QtWidgets.QMainWindow):
         self.pbtn_addBrew.clicked.connect(self.add_brew)
         self.pbtn_startBrews.clicked.connect(self.start_brews)
         self.rbtngrp.buttonClicked.connect(self.update_auth_input)
+        self.pbtn_log.clicked.connect(self.show_log)
 
     def update_auth_input(self, button):
         if button.text() == "MeadTools User":
@@ -155,8 +165,14 @@ class PillWindow(QtWidgets.QMainWindow):
         self.pill_widgets.append(widget)
         self.sArea_pills.widget().layout().addWidget(frame_holder)
 
+    def show_log(self):
+        self.log_viewer.show()
+
     def start_brews(self):
         # save all data to the data.json then run pills
+        if self.is_shift_pressed():
+            self.tool.log_to_db = False
+
         for pill in self.pill_widgets:
             pill.save_data()
             pill.start_session()
@@ -168,7 +184,7 @@ class PillWindow(QtWidgets.QMainWindow):
             self.tool.data["MTDetails"]["MTEmail"] = self.lablineE_username.text
             self.tool.data["MTDetails"]["MTPassword"] = self.lablineE_password.text
             self.tool.mtools.save_data()
-            success = self.tool.mtools.login()
+            success = self.tool.mtools.handle_login()
             if success:
                 self.update_status("Successfully Logged into Mead Tools")
                 self.mdata["LoginType"] = "MeadTools"
@@ -200,8 +216,7 @@ class PillWindow(QtWidgets.QMainWindow):
         Args:
             message (str): message to display
         """
-        self.statusbar.showMessage(message, 5000)
-        # QtCore.QCoreApplication.instance().processEvents()
+        self.statusbar.showMessage(message, 10000)
 
     def closeEvent(self, event):
         # save the window settings
@@ -209,6 +224,8 @@ class PillWindow(QtWidgets.QMainWindow):
             geo = self.saveGeometry()
             self.settings.setValue("geometry", geo)
             self.settings.setValue("auth_type", self.rbtngrp.checkedId())
+        if self.log_viewer:
+            self.log_viewer.close()
 
     def yes_no_messagebox(self, title: str, msg: str, icon_name: str = "NoIcon"):
         """Create yes/no message box with given title and message
@@ -239,6 +256,26 @@ class PillWindow(QtWidgets.QMainWindow):
         elif return_value == QtWidgets.QMessageBox.No:
             return False
         return None
+
+    def logged_in(self, can_start: bool):
+        """Set the buttons on or off if we are logged in
+
+        Args:
+            can_start (bool): whether we can login or not
+        """
+        self.tool.log_event(f"LoggedIn: {can_start}")
+        self.pbtn_addBrew.setEnabled(can_start)
+        self.pbtn_startBrews.setEnabled(can_start)
+        for brew in self.pill_widgets:
+            brew.toggle_start_brew(can_start)
+            brew.toggle_gen_token(can_start)
+
+    def is_shift_pressed(self):
+        """Handy function to determine if the shift key is pressed
+        Returns:
+            bool: True if the shift key is pressed, False otherwise
+        """
+        return QtWidgets.QApplication.keyboardModifiers() == QtCore.Qt.ShiftModifier
 
 
 class LabeledLineEdit(QtWidgets.QWidget):
@@ -297,6 +334,7 @@ class PillWidget(QtWidgets.QWidget):
         self.chkbox_tempUnit.setChecked(True)
 
         self.pbtn_start_session = QtWidgets.QPushButton("Start Session")
+        self.pbtn_start_session.setEnabled(self.ui.mtools.logged_in)
 
         self.main_layout.addWidget(self.pbtn_remove)
         self.main_layout.addLayout(self.hlay_deviceToken)
@@ -310,26 +348,72 @@ class PillWidget(QtWidgets.QWidget):
         self.load_data()
         self.connect_ui()
 
+    @property
+    def json(self):
+        repr = {
+            "BrewName": "",
+            "Pill Name": "",
+            "Mac Address": "",
+            "Poll Interval": "",
+            "Temp in C": False,
+            "MTRecipeId": -1,
+        }
+        repr["BrewName"] = self.labLineE_brewName.text
+        repr["Pill Name"] = self.labLineE_name.text
+        repr["Mac Address"] = self.labLineE_macAddress.text
+        repr["Poll Interval"] = self.labLineE_pollInterval.text
+        repr["Temp in C"] = self.chkbox_tempUnit.isChecked()
+        repr["MTRecipeId"] = int(self.labLineE_recipeId.text)
+        return repr
+
     def connect_ui(self):
+        """Connect ui to signals and set tab order"""
+        self.setTabOrder(self.labLineE_deviceToken.lineEdit, self.labLineE_name.lineEdit)
+        self.setTabOrder(self.labLineE_name.lineEdit, self.labLineE_recipeId.lineEdit)
+        self.setTabOrder(self.labLineE_recipeId.lineEdit, self.labLineE_brewName.lineEdit)
+        self.setTabOrder(self.labLineE_brewName.lineEdit, self.labLineE_macAddress.lineEdit)
+        self.setTabOrder(self.labLineE_macAddress.lineEdit, self.labLineE_pollInterval.lineEdit)
+        self.setTabOrder(self.labLineE_pollInterval.lineEdit, self.chkbox_tempUnit)
+
         self.pbtn_genToken.clicked.connect(self.generate_token)
         self.pbtn_remove.clicked.connect(self.remove_pill)
-        self.labLineE_brewName.lineEdit.returnPressed.connect(self.set_brew_name)
-        self.labLineE_deviceToken.lineEdit.returnPressed.connect(self.save_data)
-        self.labLineE_macAddress.lineEdit.returnPressed.connect(self.save_data)
-        self.labLineE_name.lineEdit.returnPressed.connect(self.save_data)
-        self.labLineE_pollInterval.lineEdit.returnPressed.connect(self.save_data)
-        self.labLineE_recipeId.lineEdit.returnPressed.connect(self.save_data)
+        self.labLineE_brewName.lineEdit.editingFinished.connect(self.set_brew_name)
+        self.labLineE_deviceToken.lineEdit.editingFinished.connect(self.save_data)
+        self.labLineE_macAddress.lineEdit.editingFinished.connect(self.save_data)
+        self.labLineE_name.lineEdit.editingFinished.connect(self.save_data)
+        self.labLineE_pollInterval.lineEdit.editingFinished.connect(self.save_data)
+        self.labLineE_recipeId.lineEdit.editingFinished.connect(self.save_data)
         self.pbtn_start_session.clicked.connect(self.start_session)
+        self.chkbox_tempUnit.checkStateChanged.connect(self.save_data)
+
+    def toggle_gen_token(self, can_gen: bool):
+        """Set whether the generate token button can be clicked
+
+        Args:
+            can_gen (bool): button can be clicked
+        """
+        self.pbtn_genToken.setEnabled(can_gen)
+
+    def toggle_start_brew(self, can_start: bool):
+        """Enable/Disable the start brew button based on if we are logged in
+
+        Args:
+            can_start (bool): logged in or not
+        """
+        self.pbtn_start_session.setEnabled(can_start)
 
     def remove_pill(self):
         """Remove pill data and widget"""
         self.setParent(None)
+        self.ui.tool.log_event(f"Removing Pill: {self.labLineE_brewName.text}")
         self.ui.pill_widgets.remove(self)
         self.frame.setParent(None)
+        self.ui.tool.data.get("Sessions", []).remove(self.json)
+        self.ui.mtools.save_data()
 
     def generate_token(self):
         token = self.ui.tool.mtools.generate_device_token()
-        print(f"Generated new Token :{token}")
+        self.ui.tool.log_event(f"Generated new Token :{token}")
         self.ui.tool.data.get("MTDetails", {})["MTDeviceToken"] = token
         self.save_data()
         self.load_data()
@@ -489,6 +573,92 @@ class CollapsibleFrame(QtWidgets.QWidget):
             layout (QtWidgets.QLayout): Layout to add
         """
         self.layout_frame.addLayout(layout)
+
+
+class LogViewer(QtWidgets.QWidget):
+    def __init__(self, log_path: Path):
+        super().__init__()
+        self.log_path = log_path
+        self.last_size = 0
+
+        self.setWindowTitle("Log Viewer")
+        self.resize(600, 400)
+
+        self.text_box = QtWidgets.QTextEdit(self)
+        self.text_box.setReadOnly(True)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(self.text_box)
+
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self.check_for_update)
+        self.timer.start(1000)  # check every 1 second
+
+        self.check_for_update()  # load initial content
+
+    def check_for_update(self):
+        if not self.log_path.exists():
+            self.text_box.setPlainText("Log file does not exist.")
+            return
+
+        current_size = self.log_path.stat().st_size
+        if current_size != self.last_size:
+            self.last_size = current_size
+            with self.log_path.open("r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+            self.update_log_display(lines)
+
+    def update_log_display(self, lines):
+        self.text_box.clear()
+        for line in lines:
+            html_line = line.strip()
+
+            html_line = html_line.replace("ERROR", "<span style='color:red; font-weight:bold'>ERROR</span>")
+            html_line = html_line.replace("WARNING", "<span style='color:yellow; font-weight:bold'>WARNING</span>")
+            html_line = html_line.replace("INFO", "<span style='color:green; font-weight:bold'>INFO</span>")
+            # handle the data output
+            html_line = html_line.replace("BrewName:", "<span style='color:orange; font-weight:bold'>BrewName:</span>")
+            html_line = html_line.replace(
+                "Firmware Version:", "<span style='color:orange; font-weight:bold'>Firmware Version:</span>"
+            )
+            html_line = html_line.replace("MacAddr:", "<span style='color:orange; font-weight:bold'>MacAddr:</span>")
+            html_line = html_line.replace(
+                "Start Gravity:", "<span style='color:orange; font-weight:bold'>Start Gravity:</span>"
+            )
+            html_line = html_line.replace(
+                "CurrGravity:", "<span style='color:orange; font-weight:bold'>CurrGravity:</span>"
+            )
+            html_line = html_line.replace("ABV:", "<span style='color:orange; font-weight:bold'>ABV:</span>")
+            html_line = html_line.replace(
+                "Last Event TimeStamp:", "<span style='color:orange; font-weight:bold'>Last Event TimeStamp:</span>"
+            )
+            html_line = html_line.replace("Temp:", "<span style='color:orange; font-weight:bold'>Temp:</span>")
+            html_line = html_line.replace("X-Accel :", "<span style='color:orange; font-weight:bold'>X-Accel :</span>")
+            html_line = html_line.replace("Y-Accel :", "<span style='color:orange; font-weight:bold'>Y-Accel :</span>")
+            html_line = html_line.replace("Z-Accel :", "<span style='color:orange; font-weight:bold'>Z-Accel :</span>")
+            html_line = html_line.replace("Battery :", "<span style='color:orange; font-weight:bold'>Battery :</span>")
+
+            self.text_box.insertHtml(f"{html_line}<br>")
+
+        self.text_box.moveCursor(QtGui.QTextCursor.End)
+
+    # def update_log_display(self, lines):
+    #     self.text_box.clear()
+    #     for line in lines:
+    #         color = "yellow"
+    #         if "ERROR" in line:
+    #             color = "red"
+    #         elif "WARNING" in line:
+    #             color = "orange"
+    #         elif "INFO" in line:
+    #             color = "green"
+    #         elif:
+    #             "BrewName"
+
+    #         html_line = f"<span style='color:{color}'>{line.strip()}</span><br>"
+    #         self.text_box.insertHtml(html_line)
+
+    #     self.text_box.moveCursor(QtGui.QTextCursor.End)
 
 
 # ScrollArea Setup
