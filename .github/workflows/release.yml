@@ -20,12 +20,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Update data.json with VersionNumber
+      - name: Update data.json with GitHub ref name
         env:
           VNum: ${{ github.ref_name }}
         run: |
-          jq --arg vnum "$VNum" '.VNum = $vnum' src/data.json > tmp.json && mv tmp.json src/data.json
-
+          jq --arg vnum "$VNum" '.VNum = $vnum' src/data.json > tmp.json
+          if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            mv tmp.json src/data.json  # Linux
+          elif [[ "$OSTYPE" == "darwin"* ]]; then
+            mv tmp.json src/data.json  # macOS
+          elif [[ "$OSTYPE" == "cygwin" || "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
+            Move-Item tmp.json src/data.json  # Windows (PowerShell)
+          else
+            echo "Unsupported OS type: $OSTYPE"
+            exit 1
+          fi
 
 
       - name: Setup Python
