@@ -20,6 +20,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      - name: Update data.json with VersionNumber
+        env:
+          VNum: ${{ github.ref_name }}
+        run: |
+          jq --arg vnum "$VNum" '.VNum = $vnum' src/data.json > tmp.json && mv tmp.json src/data.json
+
+
+
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
@@ -57,12 +65,6 @@ jobs:
             src\PillToMeadTools.py
         shell: cmd
 
-      - name: Inject secure config
-        run: |
-          echo "GOOGLE_CLIENT_ID = '${{ secrets.GOOGLE_CLIENT_ID }}'" >> config.py
-          echo "GOOGLE_CLIENT_SECRET = '${{ secrets.GOOGLE_CLIENT_SECRET }}'" >> config.py
-          echo "NEXTJS_API_URL = '${{ secrets.NEXTJS_API_URL }}'" >> config.py
-
       # macOS Build
       - name: Build macOS App Bundle
         if: runner.os == 'macOS'
@@ -89,13 +91,7 @@ jobs:
           # Zip the app bundle to preserve structure
           cd dist && zip -r MeadToolsPill-macOS.zip MeadToolsPill.app
         shell: bash
-
-      - name: Inject secure config
-        run: |
-          echo "GOOGLE_CLIENT_ID = '${{ secrets.GOOGLE_CLIENT_ID }}'" >> config.py
-          echo "GOOGLE_CLIENT_SECRET = '${{ secrets.GOOGLE_CLIENT_SECRET }}'" >> config.py
-          echo "NEXTJS_API_URL = '${{ secrets.NEXTJS_API_URL }}'" >> config.py
-
+        
       # Linux Build
       - name: Build Linux Executable
         if: runner.os == 'Linux'
