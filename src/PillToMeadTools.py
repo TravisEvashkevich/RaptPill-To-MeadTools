@@ -903,6 +903,7 @@ class PillHolder(object):
             PillGui.setup_ui(self)
             WINDOW = PillGui.WINDOW
             self.ui = WINDOW
+            self.check_for_release_updates()
             if WINDOW:
 
                 WINDOW.qapp.exec()
@@ -910,9 +911,61 @@ class PillHolder(object):
             else:
                 raise RuntimeError("data.json not found! - refer to github depot on how to get/setup data.json")
         else:
+            self.check_for_release_updates()
             # run sessions from the data.json
             self.mtools.handle_login()
             self.run_headless_pills()
+
+    def check_for_release_updates(self):
+        print("Checking for version update on github...")
+        curr_version = self.data.get("VNum", "Release v1.0.01")
+        curr_version = curr_version.replace("Release v", "")
+
+        response = requests.get("https://api.github.com/repos/TravisEvashkevich/RaptPill-To-MeadTools/releases/latest")
+        gh_version = response.json()["name"]
+        gh_version = gh_version.replace("Release v", "")
+        result = self.compare_versions(curr_version, gh_version)
+        print(f"Result:{result} , {curr_version} : {gh_version}")
+        if result < 0:
+            # gh_version is newer than ours, let users know.
+            if self.ui:
+                self.ui.show_messagebox(
+                    "New Version Available",
+                    f"New Version: v{gh_version} is available <a href='https://github.com/TravisEvashkevich/RaptPill-To-MeadTools/releases'>Get The Update<a/>",
+                )
+            else:
+                print("\n\n")
+                print("*" * 100)
+                print(
+                    f"New Version: v{gh_version} is available: https://github.com/TravisEvashkevich/RaptPill-To-MeadTools/releases"
+                )
+                print("*" * 100)
+                print("\n\n")
+
+    def compare_versions(self, v1, v2):
+        """compare the version numbers
+
+        Args:
+            v1 (str): first to compare
+            v2 (str): second to compare
+
+        Returns:
+            int: -1 if first is less than second, 0 if same, 1 if first is ahead of second
+        """
+        parts1 = [int(p) for p in v1.split(".")]
+        parts2 = [int(p) for p in v2.split(".")]
+
+        # Pad shorter version with zeros (e.g., "1.2" becomes "1.2.0")
+        length = max(len(parts1), len(parts2))
+        parts1 += [0] * (length - len(parts1))
+        parts2 += [0] * (length - len(parts2))
+
+        if parts1 < parts2:
+            return -1
+        elif parts1 > parts2:
+            return 1
+        else:
+            return 0
 
     def run_headless_pills(self):
 

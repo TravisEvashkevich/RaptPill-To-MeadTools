@@ -257,6 +257,32 @@ class PillWindow(QtWidgets.QMainWindow):
             return False
         return None
 
+    def show_messagebox(self, title: str, msg: str, icon_name: str = "NoIcon"):
+        """Show a messagebox to the user
+
+        Args:
+            title (str): window title
+            msg (str): message to display
+            icon_name (str, optional): Optional icon to put in window. Defaults to "NoIcon". - Information, Warning, Error, Critical, NoIcon
+        """
+        msg_box = QtWidgets.QMessageBox(self)
+        if icon_name == "Information":
+            msg_box.setIcon(QtWidgets.QMessageBox.Information)
+        elif icon_name == "Warning":
+            msg_box.setIcon(QtWidgets.QMessageBox.Warning)
+        elif icon_name == "Critical" or icon_name == "Error":
+            msg_box.setIcon(QtWidgets.QMessageBox.Critical)
+        elif icon_name == "Question":
+            msg_box.setIcon(QtWidgets.QMessageBox.Question)
+        elif icon_name == "NoIcon":
+            msg_box.setIcon(QtWidgets.QMessageBox.NoIcon)
+
+        msg_box.setText(msg)
+        msg_box.setWindowTitle(title)
+        msg_box.setTextFormat(QtCore.Qt.RichText)
+        msg_box.setStandardButtons(QtWidgets.QMessageBox.Ok)
+        msg_box.exec()
+
     def logged_in(self, can_start: bool):
         """Set the buttons on or off if we are logged in
 
@@ -271,6 +297,11 @@ class PillWindow(QtWidgets.QMainWindow):
             brew.toggle_gen_token(can_start)
 
     def update_huds(self, pill):
+        """Update the hud for pill data based on the pill name and macaddress
+
+        Args:
+            pill (Pill): pill which has data
+        """
         for item in self.pill_widgets:
             if item.brew_name == pill.session_name and item.mac_address == pill.mac_address:
                 self.tool.log_event(f"Updating HUD: {item.brew_name}")
