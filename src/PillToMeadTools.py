@@ -124,6 +124,10 @@ class MeadTools(object):
     def __brews_url__(self):
         return f"{self.__base_url__}/hydrometer/brew"
 
+    @property
+    def ui(self):
+        return self.pill_holder.ui
+
     def save_data(self):
         """save the self.data back to data.json"""
         self.data_path.chmod(0o777)
@@ -136,20 +140,25 @@ class MeadTools(object):
         Raises:
             RuntimeError: Raised when not able to login to MeadTools
         """
-        success = False
-        if self.mt_data.get("AccessToken", None) and self.mt_data.get("RefreshToken", None):
-            success = self.refresh_login()
-            if not success:
-                self.pill_holder.log_event("Refresh Login failed, login again...")
-                success = self.login()
-            self.pill_holder.log_event(f"Refreshed Login: {success}")
+        if self.mt_data.get("LoginType", "MeadTools") == "MeadTools":
+            success = False
+            if self.mt_data.get("AccessToken", None) and self.mt_data.get("RefreshToken", None):
+                success = self.refresh_login()
+                if not success:
+                    self.pill_holder.log_event("Refresh Login failed, login again...")
+                    success = self.login()
+                self.pill_holder.log_event(f"Refreshed Login: {success}")
 
-        elif self.mt_data.get("MTEmail", None) and self.mt_data.get("MTPassword", None):
-            success = self.login()
-        else:
-            raise RuntimeError("Not able to login. Check email and password are set in data.json")
-        self.logged_in = success
-        self.pill_holder.ui.logged_in(self.logged_in)
+            elif self.mt_data.get("MTEmail", None) and self.mt_data.get("MTPassword", None):
+                success = self.login()
+            else:
+                raise RuntimeError("Not able to login. Check email and password are set in data.json")
+            self.logged_in = success
+        elif self.mt_data.get("LoginType", "MeadTools") == "Google":
+            self.google_auth()
+
+        if self.ui:
+            self.ui.logged_in(self.logged_in)
 
     def refresh_login(self) -> bool:
         """Refresh the access token for the given user
@@ -222,18 +231,27 @@ class MeadTools(object):
         Returns:
             bool: whether it successfully logged in or not
         """
-        # open a web browser
-        webbrowser.open_new(self.mt_data.get("MTGAuth", "No Google Auth URL!"))
+        if self.ui and (self.data.get("AccessToken", None) and self.data.get("LoginType", "MeadTools") == "Google"):
+            # open a web browser
+            webbrowser.open_new(self.mt_data.get("MTGAuth", "No Google Auth URL!"))
 
-        token = self.wait_for_token()
-        if token == "" or token is None:
-            return
-        self.__token__ = token
-        self.mt_data["AccessToken"] = token
-        self.save_data()
-        self.logged_in = self.__token__ is not None
+            token = self.wait_for_token()
+            if token == "" or token is None:
+                return
+            self.__token__ = token
+            self.mt_data["AccessToken"] = token
+            self.save_data()
+            self.logged_in = self.__token__ is not None
+        else:
+            self.__token__ = self.mt_data.get("AccessToken", None)
+            if self.__token__ == None:
+                raise ValueError("AccessToken for Google Authentication not set!")
+
+            self.logged_in = self.__token__ is not None
+
         # update the gui now that we're hopefully logged in
-        self.pill_holder.ui.logged_in(self.logged_in)
+        if self.ui:
+            self.ui.logged_in(self.logged_in)
         return True
 
     def get_hydrometers(self):
@@ -429,6 +447,8 @@ class MeadTools(object):
         response = requests.post(self.__pill_url__, json=body)
         if response.status_code == 200:
             self.pill_holder.log_event("Successfully logged data to MTools...")
+            if self.ui:
+                self.ui.update_huds(pill)
             return True
         else:
             self.pill_holder.log_event(f"!!! Failed to log data to MeadTools! {response} !!!", "error")
@@ -890,7 +910,40 @@ class PillHolder(object):
             else:
                 raise RuntimeError("data.json not found! - refer to github depot on how to get/setup data.json")
         else:
-            raise RuntimeError("Can't currently run without gui!")
+            # run sessions from the data.json
+            self.mtools.handle_login()
+            self.run_headless_pills()
+
+    def run_headless_pills(self):
+
+        self.log_event("Starting Pill Sessions...")
+        for pill_details in self.data.get("Sessions", []):
+            # MAC addresses of your RAPT Pill(s) - in case you have more (This hasn't been actually tested but it should in theory work.)
+            self.log_event(pill_details)
+
+            pill = RaptPill(
+                self.data,
+                pill_details,
+                self.data_path,
+                pill_details.get("BrewName", "NoSessionNameSet"),
+                self.data.get("MTDetails", {}).get("MTDeviceToken", "NO DEVICE ID"),
+                pill_details.get("Mac Address", "No Mac Address Set!"),
+                pill_details.get("Poll Interval", ""),
+                pill_holder=self,
+                log_to_db=self.log_to_db,
+                temp_as_celsius=pill_details.get("Temp in C", True),
+                mtools=self.mtools,
+            )
+            self.pills.append(pill)
+            if pill.mtools.logged_in:
+                self.log_event(f'Should start pill session! {pill_details.get("BrewName", "No Session")}')
+                pill.start()
+
+            else:
+                self.update_status(f"Not logged in to MeadTools - can't start Brew: {pill.session_name}")
+        while True:
+            # just keep running while headless - this means that the program needs to be quit by the user in console/etc.
+            time()
 
     def run_pills(self):
         self.log_event("Starting Pill Sessions...")

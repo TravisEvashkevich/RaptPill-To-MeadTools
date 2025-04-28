@@ -21,7 +21,7 @@ class PillWindow(QtWidgets.QMainWindow):
         self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
         self.setWindowFlags(QtCore.Qt.Window)
 
-        # self.setStyleSheet(self.tool.curr_dir.joinpath("stylesheet/darkorange.css").read_text())
+        self.setStyleSheet(self.tool.curr_dir.joinpath("stylesheet/darkorange.css").read_text())
         self.icon = QtGui.QPixmap(self.tool.curr_dir.joinpath("icons/meadtools-pill.png").as_posix()).scaledToWidth(32)
         self.setWindowIcon(self.icon)
         self.main_widget = QtWidgets.QWidget()
@@ -270,6 +270,12 @@ class PillWindow(QtWidgets.QMainWindow):
             brew.toggle_start_brew(can_start)
             brew.toggle_gen_token(can_start)
 
+    def update_huds(self, pill):
+        for item in self.pill_widgets:
+            if item.brew_name == pill.session_name and item.mac_address == pill.mac_address:
+                self.tool.log_event(f"Updating HUD: {item.brew_name}")
+                item.update_hud(pill)
+
     def is_shift_pressed(self):
         """Handy function to determine if the shift key is pressed
         Returns:
@@ -316,9 +322,39 @@ class PillWidget(QtWidgets.QWidget):
         self.main_layout.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
         self.setLayout(self.main_layout)
 
-        self.pbtn_remove = QtWidgets.QPushButton(" X ")
-        self.pbtn_remove.setMaximumWidth(50)
+        self.hlay_hud = QtWidgets.QHBoxLayout()
+        self.hlay_hud.setAlignment(QtCore.Qt.AlignLeft)
         self.hlay_deviceToken = QtWidgets.QHBoxLayout()
+
+        self.pbtn_remove = QtWidgets.QPushButton(" X ")
+        self.pbtn_remove.setToolTip("Remove the current brew data")
+        self.pbtn_remove.setMaximumWidth(50)
+
+        self.lab_sg = QtWidgets.QLabel("SG: ")
+        self.lab_sg.setObjectName("HUDLabel")
+
+        self.lab_sgValue = QtWidgets.QLabel("0")
+        self.lab_sgValue.setObjectName("HUD")
+
+        self.lab_abv = QtWidgets.QLabel("ABV: ")
+        self.lab_abv.setObjectName("HUDLabel")
+
+        self.lab_abvValue = QtWidgets.QLabel("0")
+        self.lab_abvValue.setObjectName("HUD")
+
+        self.lab_lastTime = QtWidgets.QLabel("Last Time: ")
+        self.lab_lastTime.setObjectName("HUDLabel")
+
+        self.lab_lastTimeValue = QtWidgets.QLabel("None")
+        self.lab_lastTimeValue.setObjectName("HUD")
+
+        self.hlay_hud.addWidget(self.lab_sg)
+        self.hlay_hud.addWidget(self.lab_sgValue)
+        self.hlay_hud.addWidget(self.lab_abv)
+        self.hlay_hud.addWidget(self.lab_abvValue)
+        self.hlay_hud.addWidget(self.lab_lastTime)
+        self.hlay_hud.addWidget(self.lab_lastTimeValue)
+
         self.labLineE_deviceToken = LabeledLineEdit("iSpindel Device Token:", "", False, self)
         self.pbtn_genToken = QtWidgets.QPushButton("Generate Device Token")
         self.hlay_deviceToken.addWidget(self.labLineE_deviceToken)
@@ -337,6 +373,7 @@ class PillWidget(QtWidgets.QWidget):
         self.pbtn_start_session.setEnabled(self.ui.mtools.logged_in)
 
         self.main_layout.addWidget(self.pbtn_remove)
+        self.main_layout.addLayout(self.hlay_hud)
         self.main_layout.addLayout(self.hlay_deviceToken)
         self.main_layout.addWidget(self.labLineE_name)
         self.main_layout.addWidget(self.labLineE_recipeId)
@@ -347,6 +384,14 @@ class PillWidget(QtWidgets.QWidget):
         self.main_layout.addWidget(self.pbtn_start_session)
         self.load_data()
         self.connect_ui()
+
+    @property
+    def brew_name(self):
+        return self.labLineE_brewName.text
+
+    @property
+    def mac_address(self):
+        return self.labLineE_macAddress.text
 
     @property
     def json(self):
@@ -386,6 +431,11 @@ class PillWidget(QtWidgets.QWidget):
         self.pbtn_start_session.clicked.connect(self.start_session)
         self.chkbox_tempUnit.checkStateChanged.connect(self.save_data)
 
+    def update_hud(self, pill):
+        self.lab_sgValue.setText(f" {pill.curr_gravity}")
+        self.lab_abvValue.setText(str(pill.abv))
+        self.lab_lastTimeValue.setText(str(pill.last_event))
+
     def toggle_gen_token(self, can_gen: bool):
         """Set whether the generate token button can be clicked
 
@@ -400,6 +450,7 @@ class PillWidget(QtWidgets.QWidget):
         Args:
             can_start (bool): logged in or not
         """
+        self.pbtn_genToken.setEnabled(not can_start)
         self.pbtn_start_session.setEnabled(can_start)
 
     def remove_pill(self):
