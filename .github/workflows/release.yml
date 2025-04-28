@@ -38,12 +38,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libxcb-xinerama0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xkb1 libxkbcommon-dev libxcb-shape0 libxcb-xinerama0-dev
 
-      - name: Inject secure config
-        run: |
-          echo "GOOGLE_CLIENT_ID = '${{ secrets.GOOGLE_CLIENT_ID }}'" >> config.py
-          echo "GOOGLE_CLIENT_SECRET = '${{ secrets.GOOGLE_CLIENT_SECRET }}'" >> config.py
-          echo "NEXTJS_API_URL = '${{ secrets.NEXTJS_API_URL }}'" >> config.py
-
       # Windows Build
       - name: Build Windows Executable
         if: runner.os == 'Windows'
