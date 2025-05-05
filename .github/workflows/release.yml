@@ -75,7 +75,7 @@ jobs:
             --name "MeadToolsPill" \
             --icon=src/icons/meadtools-pill.icns \
             --add-data "src/icons:icons" \
-            --add-data "src\stylesheet:stylesheet" \
+            --add-data "src/stylesheet:stylesheet" \
             --add-data "src/data.json:." \
             --hidden-import=PySide6.QtCore \
             --hidden-import=PySide6.QtGui \
@@ -103,7 +103,7 @@ jobs:
              --name meadtools-pill-linux \
              --icon=src/icons/meadtools-pill.png \
              --add-data "src/icons:icons" \
-             --add-data "src\stylesheet:stylesheet" \
+             --add-data "src/stylesheet:stylesheet" \
              --add-data "src/data.json:." \
              --hidden-import=PySide6.QtCore \
              --hidden-import=PySide6.QtGui \
