@@ -976,6 +976,7 @@ class PillHolder(object):
             parts2 = [int(p) for p in v2.split(".")]
         except:
             self.log_event(f"Failed To Get Version Number: {v1} - {v2}")
+            raise RuntimeError(f"Failed To Get Version Number: {v1} - {v2}")
 
         # Pad shorter version with zeros (e.g., "1.2" becomes "1.2.0")
         length = max(len(parts1), len(parts2))
