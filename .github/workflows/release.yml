@@ -21,18 +21,12 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Update data.json with GitHub ref name
-        env:
-          VNum: ${{ github.ref_name }}
-        run: |
-          jq --arg vnum "$VNum" '.VNum = $vnum' src/data.json > tmp.json
-          if [[ "$OSTYPE" == "linux-gnu"* || "$OSTYPE" == "darwin"* ]]; then
-            mv tmp.json src/data.json  # Linux/macOS (Bash)
-          elif [[ "$OSTYPE" == "cygwin" || "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
-            powershell -Command "Move-Item tmp.json src/data.json"  # Windows (PowerShell)
-          else
-            echo "Unsupported OS type: $OSTYPE"
-            exit 1
-          fi
+        uses: maxgfr/github-change-json@main
+        with:
+          path: ./src/data.json
+          key: VNum
+          value: ${{ github.ref_name }}
+          commit: false
 
 
       - name: Setup Python
