@@ -938,11 +938,12 @@ class PillHolder(object):
     def check_for_release_updates(self):
         print("Checking for version update on github...")
         curr_version = self.data.get("VNum", "Release v1.0.01")
-        curr_version = curr_version.replace("Release v", "")
+        curr_version = curr_version.lower().replace("release v", "")
 
         response = requests.get("https://api.github.com/repos/TravisEvashkevich/RaptPill-To-MeadTools/releases/latest")
         gh_version = response.json()["name"]
-        gh_version = gh_version.replace("Release v", "")
+        gh_version = gh_version.lower().replace("release v", "")
+        self.log_event(f"Comparing Curr:{curr_version} - GH:{gh_version}")
         result = self.compare_versions(curr_version, gh_version)
         print(f"Result: {result} , {curr_version} : {gh_version}")
         if result < 0:
