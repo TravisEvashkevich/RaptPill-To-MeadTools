@@ -3,22 +3,21 @@ import sys
 from bleak import BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse, parse_qs
+
 import asyncio
 from pathlib import Path
 import json
 from struct import unpack
 from collections import namedtuple
 from datetime import datetime, timezone
-import traceback
 import logging
 import requests
 from pprint import pprint
 from time import time
 import threading
 import webbrowser
-
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import urlparse, parse_qs
 
 
 # Taken from rapt_ble on github (https://github.com/sairon/rapt-ble/blob/main/src/rapt_ble/parser.py#L14) as well as the decode_rapt_data
@@ -867,9 +866,10 @@ class RaptPill(object):
 
 class PillHolder(object):
     def __init__(self):
+        self.appdata = self.get_datadir()
         self.curr_dir = Path(__file__).parent
-        self.log_file = self.curr_dir.joinpath("sessions.log")
-        self.last_log_file = self.curr_dir.joinpath("sessions_last.log")
+        self.log_file = self.appdata.joinpath("meadtools/sessions.log")
+        self.last_log_file = self.appdata.joinpath("meadtools/sessions_last.log")
         if self.last_log_file.exists():
             self.last_log_file.unlink()
         if self.log_file.exists():
@@ -916,6 +916,25 @@ class PillHolder(object):
             self.mtools.handle_login()
             self.run_headless_pills()
 
+    def get_datadir(self) -> Path:
+        """
+        Returns a parent directory path
+        where persistent application data can be stored.
+
+        # linux: ~/.local/share
+        # macOS: ~/Library/Application Support
+        # windows: C:/Users/<USER>/AppData/Roaming
+        """
+
+        home = Path.home()
+
+        if sys.platform == "win32":
+            return home / "AppData/Roaming"
+        elif sys.platform == "linux":
+            return home / ".local/share"
+        elif sys.platform == "darwin":
+            return home / "Library/Application Support"
+
     def check_for_release_updates(self):
         print("Checking for version update on github...")
         curr_version = self.data.get("VNum", "Release v1.0.01")
@@ -925,7 +944,7 @@ class PillHolder(object):
         gh_version = response.json()["name"]
         gh_version = gh_version.replace("Release v", "")
         result = self.compare_versions(curr_version, gh_version)
-        print(f"Result:{result} , {curr_version} : {gh_version}")
+        print(f"Result: {result} , {curr_version} : {gh_version}")
         if result < 0:
             # gh_version is newer than ours, let users know.
             if self.ui:
@@ -952,8 +971,11 @@ class PillHolder(object):
         Returns:
             int: -1 if first is less than second, 0 if same, 1 if first is ahead of second
         """
-        parts1 = [int(p) for p in v1.split(".")]
-        parts2 = [int(p) for p in v2.split(".")]
+        try:
+            parts1 = [int(p) for p in v1.split(".")]
+            parts2 = [int(p) for p in v2.split(".")]
+        except:
+            self.log_event(f"Failed To Get Version Number: {v1} - {v2}")
 
         # Pad shorter version with zeros (e.g., "1.2" becomes "1.2.0")
         length = max(len(parts1), len(parts2))
