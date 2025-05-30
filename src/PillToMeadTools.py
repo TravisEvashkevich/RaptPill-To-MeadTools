@@ -6,6 +6,7 @@ from bleak.backends.scanner import AdvertisementData
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
+from pkg_resources import parse_version
 import asyncio
 from pathlib import Path
 import json
@@ -936,31 +937,32 @@ class PillHolder(object):
             return home / "Library/Application Support"
 
     def check_for_release_updates(self):
-        print("Checking for version update on github...")
-        curr_version = self.data.get("VNum", "Release v1.0.01")
-        curr_version = curr_version.lower().replace("release v", "")
+        self.log_event("Checking for version update on github...")
+        curr_version = self.data.get("VNum", "v1.0.01")
+        curr_version = curr_version.replace("v", "")
+        self.log_event(f"data.json version number: {curr_version}")
 
         response = requests.get("https://api.github.com/repos/TravisEvashkevich/RaptPill-To-MeadTools/releases/latest")
         gh_version = response.json()["name"]
         gh_version = gh_version.lower().replace("release v", "")
-        self.log_event(f"Comparing Curr:{curr_version} - GH:{gh_version}")
-        result = self.compare_versions(curr_version, gh_version)
-        print(f"Result: {result} , {curr_version} : {gh_version}")
-        if result < 0:
+        self.log_event(f"Comparing Curr: {curr_version} - GH: {gh_version}")
+        latest_version = parse_version(curr_version) < parse_version(gh_version)
+        self.log_event(f"Result: {latest_version} , {curr_version} : {gh_version}")
+        if latest_version:
             # gh_version is newer than ours, let users know.
             if self.ui:
                 self.ui.show_messagebox(
                     "New Version Available",
-                    f"New Version: v{gh_version} is available <a href='https://github.com/TravisEvashkevich/RaptPill-To-MeadTools/releases'>Get The Update<a/>",
+                    f"New Version: {gh_version} is available <a href='https://github.com/TravisEvashkevich/RaptPill-To-MeadTools/releases'>Get The Update<a/>",
                 )
-            else:
-                print("\n\n")
-                print("*" * 100)
-                print(
-                    f"New Version: v{gh_version} is available: https://github.com/TravisEvashkevich/RaptPill-To-MeadTools/releases"
-                )
-                print("*" * 100)
-                print("\n\n")
+
+            print("\n\n")
+            print("*" * 100)
+            print(
+                f"New Version: v{gh_version} is available: https://github.com/TravisEvashkevich/RaptPill-To-MeadTools/releases"
+            )
+            print("*" * 100)
+            print("\n\n")
 
     def compare_versions(self, v1, v2):
         """compare the version numbers
@@ -1141,7 +1143,7 @@ class PillHolder(object):
         sys_stdout = sys.stdout
         sys.stdout = sys.__stdout__
         sys.stderr = sys.__stderr__
-
+        print(message)
         if severity.lower() == "info":
             self.logger.info(message)
         elif severity.lower() == "debug":
