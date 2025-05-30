@@ -1,8 +1,9 @@
 {
-    "UseGui": true,
-    "MTDetails": {
-        "MTUrl": "https://meadtools.com/api",
-        "MTGAuth": "https://meadtools.com/api/auth/start-oauth-flow"
-    },
-    "Sessions": []
+  "UseGui": true,
+  "MTDetails": {
+    "MTUrl": "https://meadtools.com/api",
+    "MTGAuth": "https://meadtools.com/api/auth/start-oauth-flow"
+  },
+  "Sessions": [],
+  "VNum": "v1.0.02"
 }
